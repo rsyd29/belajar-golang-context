@@ -1,0 +1,80 @@
+Context With Timeout
+1. Selain menambahkan value ke context, dan juga sinyal cancel, kita juga bisa menambahkan sinyal cancel ke context
+secara otomatis dengan menggunakan pengaturan timeout.
+2. Dengan menggunakan pengaturan timeout, kita tidak perlu melakukan eksekusi cancel secara manual, cancel akan otomatis
+dieksekusi jika waktu timeout sudah terlewati.
+3. Penggunaan context dengan timeout sangat cocok ketika misal kita melakukan query ke database atau http API, namun
+ingin menentukan batas maksimal timeout-nya.
+4. Untuk membuat context dengan cancel signal secara otomatis menggunakan timeout, kita bisa menggunakan function
+context.WithTimeout(parent, duration).
+
+Timeout itu kejadian pembatalan ketika sudah melewati batas waktunya. Oleh karena itu tetap memanggil function cancel()
+Kalau datangnya lebih cepat dari batas waktu yang ditentukan maka kita juga perlu batalkan.
+Untuk memastikan tidak ada proses background yang dibelakang, agar tidak terjadi goroutine leak.
+defer cancel() artinya apabila function sudah selesai dijalankan maka dia akan tetap menjalankan function cancel() yaitu membatalkan context-nya.
+
+Jika sudah terjadi timeout, lalu kita lakukan cancel itu tidak masalah.
+
+Kode Program:
+// Context With Timeout
+func CreateCounterWithTimeout(ctx context.Context) chan int {
+	destination := make(chan int)
+
+	go func() {
+		defer close(destination)
+		counter := 1
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				destination <- counter
+				counter++
+				time.Sleep(1 * time.Second) // simulasi slow
+			}
+		}
+	}()
+	return destination
+}
+// Unit test untuk context with timeout
+func TestContextWithTimeout(t *testing.T) {
+	fmt.Println("Total Goroutine Awal", runtime.NumGoroutine())
+	parent := context.Background()
+	// context.WithTimeout(parent, duration)
+	ctx, cancel := context.WithTimeout(parent, 5 * time.Second)
+	defer cancel() // untuk memastikan function unit test sudah dijalankan maka cancel akan dieksekusi
+
+	destination := CreateCounterWithTimeout(ctx)
+	fmt.Println("Total Goroutine Func", runtime.NumGoroutine())
+	for n := range destination { // melakukan looping tidak pernah berhenti, jadi apabila itu tidak pernah berhenti
+		// sampai waktu duration timeout blm seleesai juga, maka akan dibatalkan
+		fmt.Println("Counter", n)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	fmt.Println("Total Goroutine Akhir", runtime.NumGoroutine())
+	/**
+	Output Program
+	=== RUN   TestContextWithTimeout
+	Total Goroutine Awal 2
+	Total Goroutine Func 3
+	Counter 1
+	Counter 2
+	Counter 3
+	Counter 4
+	Counter 5
+	Total Goroutine Akhir 2
+	--- PASS: TestContextWithTimeout (7.00s)
+	PASS
+
+	Kenapa keluar counternya hanya sampai 5? karena kita berhentinya setiap 1 detik (slow motion),
+	jadi setiap counter akan sleep selama 1 detik sampai counter 5. Ketika sudah sampai counter 5.
+	Duration timeoutnya hanya sampai 5 detik, maka pada saat counter 5 sinyal cancel dikirim masuk ke dalam select yang
+	menyatakan bahwa ctx.Done() telah selesai dan dibatalkan, dan channel destination akan di close.
+
+	Jadi dengan menggunakan duration timeout, maka program counter itu tidak akan lebih dari 5 detik.
+	Jadi tetap direkomendasikan tetap memanggil
+	defer cancel()
+	 */
+}
